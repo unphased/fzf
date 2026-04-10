@@ -314,11 +314,12 @@ func TestViewportSnapshot(t *testing.T) {
 	pattern := BuildPattern(
 		NewChunkCache(),
 		map[string]*Pattern{},
-		false,
+		true,
 		algo.FuzzyMatchV2,
 		false,
 		CaseSmart,
 		false,
+		true,
 		true,
 		true,
 		nil,

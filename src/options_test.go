@@ -169,7 +169,7 @@ func TestViewportStreamStdoutRequiresHeadless(t *testing.T) {
 	if err := parseOptions(&index, opts, words); err != nil {
 		t.Fatal(err)
 	}
-	if err := postProcessOptions(opts); err == nil {
+	if err := validateOptions(opts); err == nil {
 		t.Fatal("expected stdout viewport stream to require --headless")
 	}
 }

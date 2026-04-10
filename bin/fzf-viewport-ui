@@ -1,0 +1,154 @@
+#!/usr/bin/env ruby
+
+require 'json'
+require 'set'
+
+class ViewportUI
+  def initialize(input, output)
+    @input = input
+    @output = output
+    @last_output = nil
+  end
+
+  def run
+    @input.each_line do |line|
+      line = line.strip
+      next if line.empty?
+
+      event = JSON.parse(line)
+      case event['type']
+      when 'snapshot'
+        render_snapshot(event)
+      when 'output'
+        @last_output = event
+        render_output(event)
+      else
+        render_unknown(event)
+      end
+    rescue JSON::ParserError => e
+      @output.puts("invalid json: #{e.message}")
+    end
+  end
+
+  private
+
+  def tty?
+    @output.tty?
+  end
+
+  def redraw(header = nil)
+    if tty?
+      @output.print("\e[H\e[2J")
+    elsif header
+      @output.puts(header)
+    end
+  end
+
+  def render_snapshot(snapshot)
+    redraw("=== snapshot rev=#{snapshot['revision']} ===")
+
+    query = snapshot['query'].to_s
+    cursor = snapshot['queryCursor'].to_i
+    prompt = snapshot['prompt'].to_s
+
+    @output.puts("fzf viewport stream")
+    @output.puts
+    @output.puts(render_query(prompt, query, cursor))
+    @output.puts(metadata_line(snapshot))
+    @output.puts
+
+    items = snapshot['items'] || []
+    if items.empty?
+      @output.puts("(no visible rows)")
+    else
+      items.each_with_index do |item, index|
+        render_item(snapshot, item, index)
+      end
+    end
+
+    if @last_output
+      @output.puts
+      @output.puts(output_line(@last_output))
+    end
+
+    @output.flush
+  end
+
+  def render_output(event)
+    if tty?
+      @output.puts
+      @output.puts(output_line(event))
+    else
+      @output.puts(output_line(event))
+    end
+    @output.flush
+  end
+
+  def render_unknown(event)
+    @output.puts("unknown event: #{event.inspect}")
+    @output.flush
+  end
+
+  def render_query(prompt, query, cursor)
+    chars = query.each_char.to_a
+    cursor = [[cursor, 0].max, chars.length].min
+    chars.insert(cursor, '|')
+    "query: #{prompt}#{chars.join}"
+  end
+
+  def metadata_line(snapshot)
+    [
+      "rev=#{snapshot['revision']}",
+      "reading=#{snapshot['reading']}",
+      "progress=#{snapshot['progress']}%",
+      "total=#{snapshot['totalCount']}",
+      "matches=#{snapshot['matchCount']}",
+      "selected=#{snapshot['selectedCount']}",
+      "offset=#{snapshot['offset']}",
+      "current=#{snapshot['currentIndex']}",
+      "page=#{snapshot['pageSize']}",
+      "sort=#{snapshot['sort']}",
+      "raw=#{snapshot['raw']}",
+      "inputVisible=#{snapshot['inputVisible']}",
+      "headerVisible=#{snapshot['headerVisible']}"
+    ].join('  ')
+  end
+
+  def render_item(snapshot, item, index)
+    pointer = item['current'] ? '>' : ' '
+    marker = item['selected'] ? '*' : ' '
+    row_index = snapshot['offset'].to_i + index
+    display = item['display'].to_s
+    text = item['text'].to_s
+    highlighted = highlight(display, item['positions'])
+
+    @output.puts(format('%s%s [%02d] id=%s %s', pointer, marker, row_index, item['id'], highlighted))
+
+    if display != text
+      @output.puts("    raw: #{text}")
+    end
+    if item['key'] && !item['key'].empty?
+      @output.puts("    key: #{item['key']}")
+    end
+  end
+
+  def highlight(text, positions)
+    position_set = Set.new(Array(positions).map(&:to_i))
+    text.each_char.each_with_index.map do |char, index|
+      position_set.include?(index) ? "[#{char}]" : char
+    end.join
+  end
+
+  def output_line(event)
+    parts = []
+    parts << 'output:'
+    parts << "query=#{event['query'].inspect}" if event['query']
+    parts << "pressed=#{event['pressed'].inspect}" if event['pressed']
+    if event['items']
+      parts << "items=#{event['items'].map(&:inspect).join(', ')}"
+    end
+    parts.join(' ')
+  end
+end
+
+ViewportUI.new($stdin, $stdout).run
