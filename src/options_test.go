@@ -141,6 +141,39 @@ func TestIrrelevantNth(t *testing.T) {
 	}
 }
 
+func TestViewportStreamOptions(t *testing.T) {
+	index := 0
+	opts := defaultOptions()
+	words := []string{"--headless", "--page-size", "25", "--viewport-stream"}
+	if err := parseOptions(&index, opts, words); err != nil {
+		t.Fatal(err)
+	}
+	if err := postProcessOptions(opts); err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Headless {
+		t.Fatal("expected headless mode to be enabled")
+	}
+	if opts.PageSize != 25 {
+		t.Fatalf("expected page size 25, got %d", opts.PageSize)
+	}
+	if opts.ViewportStream != "-" {
+		t.Fatalf("expected stdout viewport stream, got %q", opts.ViewportStream)
+	}
+}
+
+func TestViewportStreamStdoutRequiresHeadless(t *testing.T) {
+	index := 0
+	opts := defaultOptions()
+	words := []string{"--viewport-stream"}
+	if err := parseOptions(&index, opts, words); err != nil {
+		t.Fatal(err)
+	}
+	if err := postProcessOptions(opts); err == nil {
+		t.Fatal("expected stdout viewport stream to require --headless")
+	}
+}
+
 func TestParseKeys(t *testing.T) {
 	pairs, _, _ := parseKeyChords("ctrl-z,alt-z,f2,@,Alt-a,!,ctrl-G,J,g,ctrl-alt-a,ALT-enter,alt-SPACE", "")
 	checkEvent := func(e tui.Event, s string) {

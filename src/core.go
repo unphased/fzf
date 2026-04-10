@@ -60,7 +60,7 @@ func Run(opts *Options) (int, error) {
 			return runZellij(os.Args, opts)
 		}
 
-		if needWinpty(opts) {
+		if !opts.Headless && needWinpty(opts) {
 			return runWinpty(os.Args, opts)
 		}
 	}

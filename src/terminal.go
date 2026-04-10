@@ -234,6 +234,45 @@ type Status struct {
 	Selected   []StatusItem `json:"selected"`
 }
 
+type ViewportItem struct {
+	ID        int    `json:"id"`
+	Key       string `json:"key,omitempty"`
+	Text      string `json:"text"`
+	Display   string `json:"display"`
+	Positions []int  `json:"positions,omitempty"`
+	Matched   bool   `json:"matched"`
+	Current   bool   `json:"current"`
+	Selected  bool   `json:"selected"`
+}
+
+type ViewportSnapshot struct {
+	Type          string         `json:"type"`
+	Revision      int64          `json:"revision"`
+	Query         string         `json:"query"`
+	QueryCursor   int            `json:"queryCursor"`
+	Prompt        string         `json:"prompt"`
+	InputVisible  bool           `json:"inputVisible"`
+	HeaderVisible bool           `json:"headerVisible"`
+	Reading       bool           `json:"reading"`
+	Progress      int            `json:"progress"`
+	TotalCount    int            `json:"totalCount"`
+	MatchCount    int            `json:"matchCount"`
+	SelectedCount int            `json:"selectedCount"`
+	CurrentIndex  int            `json:"currentIndex"`
+	Offset        int            `json:"offset"`
+	PageSize      int            `json:"pageSize"`
+	Sort          bool           `json:"sort"`
+	Raw           bool           `json:"raw"`
+	Items         []ViewportItem `json:"items"`
+}
+
+type ViewportOutput struct {
+	Type    string   `json:"type"`
+	Query   string   `json:"query,omitempty"`
+	Pressed string   `json:"pressed,omitempty"`
+	Items   []string `json:"items,omitempty"`
+}
+
 type versionedCallback struct {
 	version  int64
 	callback func()
@@ -242,6 +281,67 @@ type versionedCallback struct {
 type runningCmd struct {
 	cmd       *exec.Cmd
 	tempFiles []string
+}
+
+type viewportSink struct {
+	writer       io.Writer
+	closer       io.Closer
+	stdout       bool
+	lastSnapshot string
+	broken       bool
+}
+
+func newViewportSink(path string) (*viewportSink, error) {
+	if path == "-" {
+		return &viewportSink{writer: os.Stdout, stdout: true}, nil
+	}
+
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if stat, err := os.Stat(path); err == nil && stat.Mode()&os.ModeNamedPipe != 0 {
+		flags = os.O_RDWR
+	}
+	file, err := os.OpenFile(path, flags, 0600)
+	if err != nil {
+		return nil, err
+	}
+	return &viewportSink{writer: file, closer: file}, nil
+}
+
+func (v *viewportSink) emit(value any) {
+	if v == nil || v.broken {
+		return
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	if _, err := v.writer.Write(append(bytes, '\n')); err != nil {
+		v.broken = true
+	}
+}
+
+func (v *viewportSink) emitSnapshot(snapshot ViewportSnapshot) {
+	if v == nil || v.broken {
+		return
+	}
+	bytes, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	encoded := string(bytes)
+	if encoded == v.lastSnapshot {
+		return
+	}
+	v.lastSnapshot = encoded
+	if _, err := v.writer.Write(append(bytes, '\n')); err != nil {
+		v.broken = true
+	}
+}
+
+func (v *viewportSink) close() {
+	if v != nil && v.closer != nil {
+		v.closer.Close()
+	}
 }
 
 // Terminal represents terminal input/output
@@ -355,6 +455,8 @@ type Terminal struct {
 	margin               [4]sizeSpec
 	padding              [4]sizeSpec
 	unicode              bool
+	headless             bool
+	pageSize             int
 	listenAddr           *listenAddress
 	listenPort           *int
 	listener             net.Listener
@@ -430,6 +532,7 @@ type Terminal struct {
 	killedChan           chan bool
 	serverInputChan      chan []*action
 	callbackChan         chan versionedCallback
+	viewportSink         *viewportSink
 	bgQueue              map[action][]func(bool)
 	bgSemaphore          chan struct{}
 	bgSemaphores         map[action]chan struct{}
@@ -955,51 +1058,66 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		delay = initialDelay
 	}
 	var previewBox *util.EventBox
+	if opts.Headless && len(opts.Preview.command) == 0 {
+		previewBox = nil
+	}
 	// We need to start the previewer even when --preview option is not specified
 	// * if HTTP server is enabled
 	// * if 'preview' or 'change-preview' action is bound to a key
 	// * if 'transform' action is bound to a key
-	if len(opts.Preview.command) > 0 || mayTriggerPreview(opts) {
+	if !opts.Headless && (len(opts.Preview.command) > 0 || mayTriggerPreview(opts)) {
 		previewBox = util.NewEventBox()
 	}
 	var renderer tui.Renderer
-	fullscreen := !opts.Height.auto && (opts.Height.size == 0 || opts.Height.percent && opts.Height.size == 100)
+	fullscreen := !opts.Headless && !opts.Height.auto && (opts.Height.size == 0 || opts.Height.percent && opts.Height.size == 100)
 	var err error
-	// Reuse ttyin if available to avoid having multiple file descriptors open
-	// when you run fzf multiple times in your Go program. Closing it is known to
-	// cause problems with 'become' action and invalid terminal state after exit.
-	if ttyin == nil {
-		if ttyin, err = tui.TtyIn(opts.TtyDefault); err != nil {
-			return nil, err
-		}
-	}
-	if fullscreen {
-		if tui.HasFullscreenRenderer() {
-			renderer = tui.NewFullscreenRenderer(opts.Theme, opts.Black, opts.Mouse, opts.Tabstop)
-		} else {
-			renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
-				true, func(h int) int { return h })
-		}
+	if opts.Headless {
+		renderer = tui.NewHeadlessRenderer(opts.Theme, opts.PageSize)
 	} else {
-		maxHeightFunc := func(termHeight int) int {
-			// Minimum height required to render fzf excluding margin and padding
-			effectiveMinHeight := minHeight
-			if previewBox != nil && opts.Preview.aboveOrBelow() {
-				effectiveMinHeight += 1 + borderLines(opts.Preview.Border())
+		// Reuse ttyin if available to avoid having multiple file descriptors open
+		// when you run fzf multiple times in your Go program. Closing it is known to
+		// cause problems with 'become' action and invalid terminal state after exit.
+		if ttyin == nil {
+			if ttyin, err = tui.TtyIn(opts.TtyDefault); err != nil {
+				return nil, err
 			}
-			if opts.noSeparatorLine() {
-				effectiveMinHeight--
-			}
-			effectiveMinHeight += borderLines(opts.BorderShape)
-			return min(termHeight, max(evaluateHeight(opts, termHeight), effectiveMinHeight))
 		}
-		renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
+		if fullscreen {
+			if tui.HasFullscreenRenderer() {
+				renderer = tui.NewFullscreenRenderer(opts.Theme, opts.Black, opts.Mouse, opts.Tabstop)
+			} else {
+				renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit,
+					true, func(h int) int { return h })
+			}
+		} else {
+			maxHeightFunc := func(termHeight int) int {
+				// Minimum height required to render fzf excluding margin and padding
+				effectiveMinHeight := minHeight
+				if previewBox != nil && opts.Preview.aboveOrBelow() {
+					effectiveMinHeight += 1 + borderLines(opts.Preview.Border())
+				}
+				if opts.noSeparatorLine() {
+					effectiveMinHeight--
+				}
+				effectiveMinHeight += borderLines(opts.BorderShape)
+				return min(termHeight, max(evaluateHeight(opts, termHeight), effectiveMinHeight))
+			}
+			renderer, err = tui.NewLightRenderer(opts.TtyDefault, ttyin, opts.Theme, opts.Black, opts.Mouse, opts.Tabstop, opts.ClearOnExit, false, maxHeightFunc)
+		}
 	}
 	if err != nil {
 		return nil, err
 	}
-	if opts.Inputless {
+	if !opts.Headless && opts.Inputless {
 		renderer.HideCursor()
+	}
+
+	var viewportSink *viewportSink
+	if len(opts.ViewportStream) > 0 {
+		viewportSink, err = newViewportSink(opts.ViewportStream)
+		if err != nil {
+			return nil, err
+		}
 	}
 	wordRubout := "[^\\pL\\pN][\\pL\\pN]"
 	wordNext := "[\\pL\\pN][^\\pL\\pN]|(.$)"
@@ -1063,6 +1181,8 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		margin:             opts.Margin,
 		padding:            opts.Padding,
 		unicode:            opts.Unicode,
+		headless:           opts.Headless,
+		pageSize:           opts.PageSize,
 		listenAddr:         opts.ListenAddr,
 		listenUnsafe:       opts.Unsafe,
 		borderShape:        opts.BorderShape,
@@ -1145,6 +1265,7 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 		killedChan:         make(chan bool),
 		serverInputChan:    make(chan []*action, 100),
 		callbackChan:       make(chan versionedCallback, maxBgProcesses),
+		viewportSink:       viewportSink,
 		bgQueue:            make(map[action][]func(bool)),
 		bgSemaphore:        make(chan struct{}, maxBgProcesses),
 		bgSemaphores:       make(map[action]chan struct{}),
@@ -1323,6 +1444,9 @@ func NewTerminal(opts *Options, eventBox *util.EventBox, executor *util.Executor
 	if t.listenAddr != nil {
 		listener, port, err := startHttpServer(*t.listenAddr, t.serverInputChan, t.dumpStatus)
 		if err != nil {
+			if t.viewportSink != nil {
+				t.viewportSink.close()
+			}
 			return nil, err
 		}
 		t.listener = listener
@@ -2004,15 +2128,14 @@ func (t *Terminal) UpdateList(result MatchResult) {
 }
 
 func (t *Terminal) output() bool {
+	outputs := make([]string, 0, len(t.printQueue)+max(1, len(t.selected)))
 	if t.printQuery {
-		t.printer(string(t.input))
+		outputs = append(outputs, string(t.input))
 	}
 	if len(t.expect) > 0 {
-		t.printer(t.pressed)
+		outputs = append(outputs, t.pressed)
 	}
-	for _, s := range t.printQueue {
-		t.printer(s)
-	}
+	outputs = append(outputs, t.printQueue...)
 	transform := func(item *Item) string {
 		return item.AsString(t.ansi)
 	}
@@ -2025,12 +2148,25 @@ func (t *Terminal) output() bool {
 	if !found {
 		current := t.currentItem()
 		if current != nil {
-			t.printer(transform(current))
+			outputs = append(outputs, transform(current))
 			found = true
 		}
 	} else {
 		for _, sel := range t.sortSelected() {
-			t.printer(transform(sel.item))
+			outputs = append(outputs, transform(sel.item))
+		}
+	}
+	if t.viewportSink != nil {
+		t.viewportSink.emit(ViewportOutput{
+			Type:    "output",
+			Query:   string(t.input),
+			Pressed: t.pressed,
+			Items:   outputs,
+		})
+	}
+	if t.viewportSink == nil || !t.viewportSink.stdout {
+		for _, output := range outputs {
+			t.printer(output)
 		}
 	}
 	return found
@@ -5858,6 +5994,9 @@ func (t *Terminal) Loop() error {
 			if t.listener != nil {
 				t.listener.Close()
 			}
+			if t.viewportSink != nil {
+				defer t.viewportSink.close()
+			}
 			t.tui.Close()
 			code = getCode()
 			if code <= ExitNoMatch && t.history != nil {
@@ -6011,7 +6150,16 @@ func (t *Terminal) Loop() error {
 						t.printPreviewDelayed()
 					case reqPrintQuery:
 						exit(func() int {
-							t.printer(string(t.input))
+							if t.viewportSink != nil {
+								t.viewportSink.emit(ViewportOutput{
+									Type:  "output",
+									Query: string(t.input),
+									Items: []string{string(t.input)},
+								})
+							}
+							if t.viewportSink == nil || !t.viewportSink.stdout {
+								t.printer(string(t.input))
+							}
 							return ExitOk
 						})
 						return
@@ -6038,6 +6186,7 @@ func (t *Terminal) Loop() error {
 					}
 				}
 				t.flush()
+				t.emitViewportSnapshot()
 				t.mutex.Unlock()
 				t.uiMutex.Unlock()
 			})
@@ -6994,7 +7143,7 @@ func (t *Terminal) Loop() error {
 				req(reqList)
 			case actOffsetMiddle:
 				soff := t.scrollOff
-				t.scrollOff = t.window.Height()
+				t.scrollOff = t.maxItems()
 				t.constrain()
 				t.scrollOff = soff
 				req(reqList)
@@ -7864,8 +8013,112 @@ func (t *Terminal) promptLines() int {
 
 // Number of item lines in the list window
 func (t *Terminal) maxItems() int {
+	if t.headless {
+		return max(t.pageSize, 0)
+	}
 	maximum := t.window.Height() - t.visibleHeaderLinesInList() - t.promptLines()
 	return max(maximum, 0)
+}
+
+func (t *Terminal) visibleResults() []Result {
+	maxLines := t.maxItems()
+	if maxLines <= 0 || t.merger.Length() == 0 || t.offset >= t.merger.Length() {
+		return nil
+	}
+
+	results := make([]Result, 0, min(maxLines, t.merger.Length()-t.offset))
+	linesLeft := maxLines
+	for idx := t.offset; idx < t.merger.Length() && linesLeft > 0; idx++ {
+		result := t.merger.Get(idx)
+		results = append(results, result)
+		consumed := 1 + t.gap
+		if t.canSpanMultiLines() {
+			consumed, _ = t.numItemLines(result.item, linesLeft)
+		}
+		linesLeft -= max(consumed, 1)
+	}
+	return results
+}
+
+func (t *Terminal) viewportItem(result Result, index int) ViewportItem {
+	item := result.item
+	matchResult := result
+	matched := true
+	if t.raw {
+		if resultMatch, found := t.matchMap[item.Index()]; found {
+			matchResult = resultMatch
+		} else {
+			matched = false
+		}
+	}
+
+	display := item.text.ToString()
+	if matched {
+		display = matchResult.item.text.ToString()
+	}
+
+	row := ViewportItem{
+		ID:       int(item.Index()),
+		Text:     item.AsString(t.ansi),
+		Display:  display,
+		Matched:  matched,
+		Current:  index == t.cy,
+		Selected: false,
+	}
+	if len(t.idNth) > 0 {
+		row.Key = t.trackKeyFor(item, t.idNth)
+	}
+	if _, selected := t.selected[item.Index()]; selected {
+		row.Selected = true
+	}
+	if matched && t.resultMerger.pattern != nil {
+		_, _, pos := t.resultMerger.pattern.MatchItem(matchResult.item, true, t.slab)
+		if pos != nil {
+			row.Positions = append([]int{}, (*pos)...)
+			sort.Ints(row.Positions)
+		}
+	}
+	return row
+}
+
+func (t *Terminal) viewportSnapshot() ViewportSnapshot {
+	results := t.visibleResults()
+	items := make([]ViewportItem, len(results))
+	for idx, result := range results {
+		items[idx] = t.viewportItem(result, idx+t.offset)
+	}
+
+	currentIndex := -1
+	if item := t.currentItem(); item != nil {
+		currentIndex = int(item.Index())
+	}
+
+	return ViewportSnapshot{
+		Type:          "snapshot",
+		Revision:      t.version,
+		Query:         string(t.input),
+		QueryCursor:   t.cx,
+		Prompt:        t.promptString,
+		InputVisible:  !t.inputless,
+		HeaderVisible: t.headerVisible,
+		Reading:       t.reading,
+		Progress:      t.progress,
+		TotalCount:    t.count,
+		MatchCount:    t.resultMerger.Length(),
+		SelectedCount: len(t.selected),
+		CurrentIndex:  currentIndex,
+		Offset:        t.offset,
+		PageSize:      t.maxItems(),
+		Sort:          t.sort,
+		Raw:           t.raw,
+		Items:         items,
+	}
+}
+
+func (t *Terminal) emitViewportSnapshot() {
+	if t.viewportSink != nil {
+		t.viewportSink.emitSnapshot(t.viewportSnapshot())
+	}
 }
 
 func (t *Terminal) dumpItem(i *Item) StatusItem {

@@ -2,13 +2,16 @@ package fzf
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
+	"github.com/junegunn/fzf/src/algo"
 	"github.com/junegunn/fzf/src/util"
 )
 
@@ -295,6 +298,92 @@ func TestQuoteEntry(t *testing.T) {
 		if escaped != expected {
 			t.Errorf("Input: %s, expected: %s, actual %s", input, expected, escaped)
 		}
+	}
+}
+
+func TestViewportSnapshot(t *testing.T) {
+	items := []*Item{
+		newItem("foo first"),
+		newItem("bar second"),
+		newItem("third foo"),
+	}
+	for idx, item := range items {
+		item.text.Index = int32(idx)
+	}
+
+	pattern := BuildPattern(
+		NewChunkCache(),
+		map[string]*Pattern{},
+		false,
+		algo.FuzzyMatchV2,
+		false,
+		CaseSmart,
+		false,
+		true,
+		true,
+		nil,
+		Delimiter{},
+		revision{},
+		[]rune("foo"),
+		map[int32]struct{}{},
+		0,
+	)
+
+	slab := util.MakeSlab(slab16Size, slab32Size)
+	results := []Result{}
+	for _, item := range items {
+		result, _, _ := pattern.MatchItem(item, true, slab)
+		if result.item != nil {
+			results = append(results, result)
+		}
+	}
+
+	merger := NewMerger(pattern, [][]Result{results}, false, false, revision{}, items[0].Index(), items[len(items)-1].Index()+1)
+	terminal := &Terminal{
+		headless:      true,
+		pageSize:      2,
+		input:         []rune("foo"),
+		cx:            2,
+		promptString:  "> ",
+		headerVisible: true,
+		count:         len(items),
+		progress:      100,
+		merger:        merger,
+		resultMerger:  merger,
+		selected: map[int32]selectedItem{
+			items[2].Index(): {at: time.Now(), item: items[2]},
+		},
+		version: 7,
+		slab:    slab,
+		sort:    true,
+	}
+
+	snapshot := terminal.viewportSnapshot()
+	if snapshot.Type != "snapshot" {
+		t.Fatalf("unexpected snapshot type: %s", snapshot.Type)
+	}
+	if snapshot.Query != "foo" || snapshot.QueryCursor != 2 {
+		t.Fatalf("unexpected query state: %#v", snapshot)
+	}
+	if snapshot.PageSize != 2 || len(snapshot.Items) != 2 {
+		t.Fatalf("unexpected page size/items: page=%d items=%d", snapshot.PageSize, len(snapshot.Items))
+	}
+	if snapshot.Items[0].Text != "foo first" || snapshot.Items[0].Display != "foo first" {
+		t.Fatalf("unexpected first row: %#v", snapshot.Items[0])
+	}
+	if len(snapshot.Items[0].Positions) == 0 {
+		t.Fatalf("expected match positions in first row: %#v", snapshot.Items[0])
+	}
+	if !snapshot.Items[1].Selected {
+		t.Fatalf("expected second visible row to be selected: %#v", snapshot.Items[1])
+	}
+
+	bytes, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(bytes), `"query":"foo"`) {
+		t.Fatalf("snapshot json missing query: %s", string(bytes))
 	}
 }
 

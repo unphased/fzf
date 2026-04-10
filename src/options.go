@@ -212,6 +212,11 @@ Usage: fzf [options]
 
   ADVANCED
     --with-shell=STR         Shell command and flags to start child processes with
+    --headless               Disable terminal rendering and emit viewport snapshots
+    --page-size=NUM          Number of viewport lines to expose in headless mode
+                             (default: 30)
+    --viewport-stream[=PATH] Emit viewport snapshots as NDJSON
+                             (omit PATH or use - for stdout)
     --listen[=[ADDR:]PORT]   Start HTTP server to receive actions via TCP
                              (To allow remote process execution, use --listen-unsafe)
     --listen=SOCKET_PATH     Start HTTP server to receive actions via Unix domain socket
@@ -675,6 +680,9 @@ type Options struct {
 	Tabstop           int
 	WithShell         string
 	ListenAddr        *listenAddress
+	Headless          bool
+	PageSize          int
+	ViewportStream    string
 	Unsafe            bool
 	ClearOnExit       bool
 	WalkerOpts        walkerOpts
@@ -721,88 +729,91 @@ func defaultOptions() *Options {
 	}
 
 	return &Options{
-		Bash:         false,
-		Zsh:          false,
-		Fish:         false,
-		Man:          false,
-		Fuzzy:        true,
-		FuzzyAlgo:    algo.FuzzyMatchV2,
-		Scheme:       "", // Unknown
-		Extended:     true,
-		Phony:        false,
-		Inputless:    false,
-		Case:         CaseSmart,
-		Normalize:    true,
-		Nth:          make([]Range, 0),
-		Delimiter:    Delimiter{},
-		Sort:         1000,
-		Track:        trackDisabled,
-		Tac:          false,
-		Criteria:     []criterion{}, // Unknown
-		Multi:        0,
-		Ansi:         false,
-		Mouse:        true,
-		Theme:        theme,
-		BaseTheme:    baseTheme,
-		Black:        false,
-		Bold:         true,
-		MinHeight:    -10,
-		Layout:       layoutDefault,
-		Cycle:        false,
-		Wrap:         false,
-		WrapWord:     false,
-		MultiLine:    true,
-		KeepRight:    false,
-		Hscroll:      true,
-		HscrollOff:   10,
-		ScrollOff:    3,
-		FileWord:     false,
-		InfoStyle:    infoDefault,
-		Ghost:        "",
-		Separator:    nil,
-		JumpLabels:   defaultJumpLabels,
-		Prompt:       "> ",
-		Gutter:       nil,
-		GutterRaw:    nil,
-		Pointer:      nil,
-		Marker:       nil,
-		MarkerMulti:  nil,
-		Query:        "",
-		Select1:      false,
-		Exit0:        false,
-		Filter:       nil,
-		ToggleSort:   false,
-		Expect:       make(map[tui.Event]string),
-		Keymap:       make(map[tui.Event][]*action),
-		Preview:      defaultPreviewOpts(""),
-		PrintQuery:   false,
-		ReadZero:     false,
-		Printer:      func(str string) { fmt.Println(str) },
-		PrintSep:     "\n",
-		Sync:         false,
-		History:      nil,
-		Header:       make([]string, 0),
-		HeaderLines:  0,
-		HeaderFirst:  false,
-		Footer:       make([]string, 0),
-		Gap:          0,
-		Ellipsis:     nil,
-		Scrollbar:    nil,
-		Margin:       defaultMargin(),
-		Padding:      defaultMargin(),
-		Unicode:      true,
-		Ambidouble:   os.Getenv("RUNEWIDTH_EASTASIAN") == "1",
-		Tabstop:      8,
-		BorderLabel:  labelOpts{},
-		PreviewLabel: labelOpts{},
-		Unsafe:       false,
-		ClearOnExit:  true,
-		WalkerOpts:   walkerOpts{file: true, hidden: true, follow: true},
-		WalkerRoot:   []string{"."},
-		WalkerSkip:   []string{".git", "node_modules"},
-		TtyDefault:   tui.DefaultTtyDevice,
-		Help:         false,
-		Version:      false}
+		Bash:           false,
+		Zsh:            false,
+		Fish:           false,
+		Man:            false,
+		Fuzzy:          true,
+		FuzzyAlgo:      algo.FuzzyMatchV2,
+		Scheme:         "", // Unknown
+		Extended:       true,
+		Phony:          false,
+		Inputless:      false,
+		Case:           CaseSmart,
+		Normalize:      true,
+		Nth:            make([]Range, 0),
+		Delimiter:      Delimiter{},
+		Sort:           1000,
+		Track:          trackDisabled,
+		Tac:            false,
+		Criteria:       []criterion{}, // Unknown
+		Multi:          0,
+		Ansi:           false,
+		Mouse:          true,
+		Theme:          theme,
+		BaseTheme:      baseTheme,
+		Black:          false,
+		Bold:           true,
+		MinHeight:      -10,
+		Layout:         layoutDefault,
+		Cycle:          false,
+		Wrap:           false,
+		WrapWord:       false,
+		MultiLine:      true,
+		KeepRight:      false,
+		Hscroll:        true,
+		HscrollOff:     10,
+		ScrollOff:      3,
+		FileWord:       false,
+		InfoStyle:      infoDefault,
+		Ghost:          "",
+		Separator:      nil,
+		JumpLabels:     defaultJumpLabels,
+		Prompt:         "> ",
+		Gutter:         nil,
+		GutterRaw:      nil,
+		Pointer:        nil,
+		Marker:         nil,
+		MarkerMulti:    nil,
+		Query:          "",
+		Select1:        false,
+		Exit0:          false,
+		Filter:         nil,
+		ToggleSort:     false,
+		Expect:         make(map[tui.Event]string),
+		Keymap:         make(map[tui.Event][]*action),
+		Preview:        defaultPreviewOpts(""),
+		PrintQuery:     false,
+		ReadZero:       false,
+		Printer:        func(str string) { fmt.Println(str) },
+		PrintSep:       "\n",
+		Sync:           false,
+		History:        nil,
+		Header:         make([]string, 0),
+		HeaderLines:    0,
+		HeaderFirst:    false,
+		Footer:         make([]string, 0),
+		Gap:            0,
+		Ellipsis:       nil,
+		Scrollbar:      nil,
+		Margin:         defaultMargin(),
+		Padding:        defaultMargin(),
+		Unicode:        true,
+		Ambidouble:     os.Getenv("RUNEWIDTH_EASTASIAN") == "1",
+		Tabstop:        8,
+		BorderLabel:    labelOpts{},
+		PreviewLabel:   labelOpts{},
+		Headless:       false,
+		PageSize:       30,
+		ViewportStream: "",
+		Unsafe:         false,
+		ClearOnExit:    true,
+		WalkerOpts:     walkerOpts{file: true, hidden: true, follow: true},
+		WalkerRoot:     []string{"."},
+		WalkerSkip:     []string{".git", "node_modules"},
+		TtyDefault:     tui.DefaultTtyDevice,
+		Help:           false,
+		Version:        false}
 }
 
 func isDir(path string) bool {
@@ -3372,6 +3383,23 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 		case "--no-listen", "--no-listen-unsafe":
 			opts.ListenAddr = nil
 			opts.Unsafe = false
+		case "--headless":
+			opts.Headless = true
+		case "--no-headless":
+			opts.Headless = false
+		case "--page-size":
+			if opts.PageSize, err = nextInt("page size required"); err != nil {
+				return err
+			}
+		case "--viewport-stream":
+			given, str := optionalNextString()
+			if given {
+				opts.ViewportStream = str
+			} else {
+				opts.ViewportStream = "-"
+			}
+		case "--no-viewport-stream":
+			opts.ViewportStream = ""
 		case "--clear":
 			opts.ClearOnExit = true
 		case "--no-clear":
@@ -3610,6 +3638,18 @@ func validateOptions(opts *Options) error {
 		return errors.New("only ANSI attributes are allowed for 'nth' (regular, bold, underline, reverse, dim, italic, strikethrough)")
 	}
 
+	if opts.PageSize <= 0 {
+		return errors.New("page size must be a positive integer")
+	}
+
+	if opts.Headless && len(opts.ViewportStream) == 0 {
+		opts.ViewportStream = "-"
+	}
+
+	if opts.ViewportStream == "-" && !opts.Headless {
+		return errors.New("stdout viewport stream requires --headless")
+	}
+
 	return nil
 }
 
@@ -3624,11 +3664,11 @@ func noSeparatorLine(style infoStyle, separator bool) bool {
 }
 
 func (opts *Options) useTmux() bool {
-	return opts.Tmux != nil && len(os.Getenv("TMUX")) > 0 && opts.Tmux.index >= opts.Height.index
+	return !opts.Headless && opts.Tmux != nil && len(os.Getenv("TMUX")) > 0 && opts.Tmux.index >= opts.Height.index
 }
 
 func (opts *Options) useZellij() bool {
-	return opts.Tmux != nil && len(os.Getenv("ZELLIJ")) > 0 && opts.Tmux.index >= opts.Height.index
+	return !opts.Headless && opts.Tmux != nil && len(os.Getenv("ZELLIJ")) > 0 && opts.Tmux.index >= opts.Height.index
 }
 
 func (opts *Options) noSeparatorLine() bool {
