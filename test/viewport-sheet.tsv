@@ -1,0 +1,21 @@
+ID	Project	Owner	Region	Status	Priority	ARR	Renewal	Notes
+A-1001	Atlas Migration	Priya Shah	North America	active	high	125000	2026-07-15	Legacy API cutover in phase 2
+A-1002	Borealis Billing	Marcus Chen	Europe	at-risk	urgent	98000	2026-05-31	Invoice drift after pricing update
+A-1003	Cinder Search	Mia Gomez	North America	active	medium	143500	2026-08-21	Ranking retune for support portal
+A-1004	Delta Docs	Samir Patel	APAC	pilot	low	41000	2026-10-10	Docs import with OCR fallback
+A-1005	Echo Onboarding	Lina Park	Europe	active	medium	76000	2026-06-14	Add partner-specific welcome flows
+A-1006	Fjord Forecasting	Jonah Brooks	North America	blocked	high	132000	2026-09-03	Awaiting warehouse feed contract
+A-1007	Granite Ledger	Avery Kim	Latin America	active	high	115000	2026-11-29	Close rules differ by subsidiary
+A-1008	Harbor Alerts	Nadia Ali	Middle East	pilot	medium	68000	2026-07-02	Alert fatigue review with ops team
+A-1009	Iris Identity	Owen Reed	North America	active	urgent	158000	2026-04-30	SCIM edge cases for contractors
+A-1010	Jasper Journals	Elena Rossi	Europe	churn-risk	high	54000	2026-05-18	Editors want bulk approval queue
+A-1011	Kite Analytics	Daniel Cruz	APAC	active	low	89000	2026-12-12	Metrics dictionary still incomplete
+A-1012	Lattice CRM	Harper Singh	North America	pilot	high	121000	2026-08-08	Field mapping for old Salesforce export
+A-1013	Monarch Mobile	Chloe Martin	Europe	active	medium	97000	2026-07-27	Push token cleanup before launch
+A-1014	Northstar Ops	Noah Bennett	North America	blocked	urgent	166000	2026-06-01	Need signed SOC exception letter
+A-1015	Orbit Scheduler	Grace Lee	APAC	active	high	134000	2026-09-25	Timezone drift around DST boundaries
+A-1016	Pulse Support	Hugo Silva	Latin America	at-risk	medium	63000	2026-05-22	Macros missing in Spanish queue
+A-1017	Quartz Queue	Isla Turner	Europe	active	low	47000	2026-11-04	Backfill script ready for staging
+A-1018	Rivet Reports	Ethan Wright	North America	pilot	medium	72000	2026-08-19	CSV export needs finance format
+A-1019	Summit Search	Ana Morales	Europe	active	urgent	151000	2026-06-28	Need typo tolerance for part codes
+A-1020	Tidal Tasks	Logan Price	North America	active	medium	83000	2026-10-06	Recurring task editor in review

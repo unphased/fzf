@@ -82,6 +82,16 @@ printf 'foo\nbar\nfoobar\n' \
   | bin/fzf --viewport-stream=/tmp/fzf-vp.jsonl
 ```
 
+Tabular viewport example:
+
+```sh
+tail -n +2 test/viewport-sheet.tsv \
+  | bin/fzf --headless --sync --query atlas --viewport-stream=- \
+  | bin/fzf-viewport-table \
+      --delimiter='\t' \
+      --columns 'ID,Project,Owner,Region,Status,Priority,ARR,Renewal,Notes'
+```
+
 Third-party libraries used
 --------------------------
 

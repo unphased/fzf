@@ -1,0 +1,277 @@
+#!/usr/bin/env ruby
+
+require 'json'
+require 'optparse'
+require 'set'
+
+DESCRIPTION = <<~TEXT
+  Render fzf viewport snapshots as an aligned table.
+TEXT
+
+EXAMPLES = <<~TEXT
+  Examples:
+    tail -f /tmp/fzf-vp.jsonl | bin/fzf-viewport-table --columns 'ID,Project,Owner'
+
+    tail -n +2 test/viewport-sheet.tsv \
+      | bin/fzf --headless --sync --query atlas --viewport-stream=- \
+      | ruby bin/fzf-viewport-table \
+          --delimiter='\\t' \
+          --columns 'ID,Project,Owner,Region,Status,Priority,ARR,Renewal,Notes'
+TEXT
+
+class ViewportTable
+  def initialize(input, output, options)
+    @input = input
+    @output = output
+    @delimiter = options[:delimiter]
+    @columns = options[:columns]
+    @use_raw = options[:raw]
+    @last_output = nil
+  end
+
+  def run
+    @input.each_line do |line|
+      line = line.strip
+      next if line.empty?
+
+      event = JSON.parse(line)
+      case event['type']
+      when 'snapshot'
+        render_snapshot(event)
+      when 'output'
+        @last_output = event
+        render_output(event)
+      else
+        render_unknown(event)
+      end
+    rescue JSON::ParserError => e
+      @output.puts("invalid json: #{e.message}")
+    end
+  end
+
+  private
+
+  def tty?
+    @output.tty?
+  end
+
+  def redraw(header = nil)
+    if tty?
+      @output.print("\e[H\e[2J")
+    elsif header
+      @output.puts(header)
+    end
+  end
+
+  def render_snapshot(snapshot)
+    redraw("=== table rev=#{snapshot['revision']} ===")
+
+    @output.puts("fzf viewport table")
+    @output.puts
+    @output.puts(render_query(snapshot))
+    @output.puts(metadata_line(snapshot))
+    @output.puts
+
+    rows = build_rows(snapshot)
+    if rows.empty?
+      @output.puts("(no visible rows)")
+    else
+      render_table(rows)
+    end
+
+    if @last_output
+      @output.puts
+      @output.puts(output_line(@last_output))
+    end
+
+    @output.flush
+  end
+
+  def render_output(event)
+    return if tty?
+
+    @output.puts(output_line(event))
+    @output.flush
+  end
+
+  def render_unknown(event)
+    @output.puts("unknown event: #{event.inspect}")
+    @output.flush
+  end
+
+  def render_query(snapshot)
+    query = snapshot['query'].to_s
+    cursor = snapshot['queryCursor'].to_i
+    chars = query.each_char.to_a
+    cursor = [[cursor, 0].max, chars.length].min
+    chars.insert(cursor, '|')
+    "query: #{snapshot['prompt']}#{chars.join}"
+  end
+
+  def metadata_line(snapshot)
+    [
+      "rev=#{snapshot['revision']}",
+      "matches=#{snapshot['matchCount']}",
+      "selected=#{snapshot['selectedCount']}",
+      "offset=#{snapshot['offset']}",
+      "current=#{snapshot['currentIndex']}",
+      "page=#{snapshot['pageSize']}",
+      "reading=#{snapshot['reading']}",
+      "progress=#{snapshot['progress']}%"
+    ].join('  ')
+  end
+
+  def build_rows(snapshot)
+    Array(snapshot['items']).each_with_index.map do |item, index|
+      source = row_source(item)
+      plain_cells = source.split(@delimiter, -1)
+      {
+        marker: "#{item['current'] ? '>' : ' '}#{item['selected'] ? '*' : ' '}",
+        row_index: snapshot['offset'].to_i + index,
+        plain_cells: plain_cells,
+        render_cells: render_cells(source, item['positions'], plain_cells)
+      }
+    end
+  end
+
+  def row_source(item)
+    if @use_raw
+      item['text'].to_s
+    else
+      display = item['display'].to_s
+      display.empty? ? item['text'].to_s : display
+    end
+  end
+
+  def render_cells(text, positions, plain_cells)
+    return plain_cells unless tty?
+
+    position_set = Set.new(Array(positions).map(&:to_i))
+    delimiter_width = @delimiter.each_char.count
+    offset = 0
+
+    plain_cells.map do |cell|
+      rendered = cell.each_char.each_with_index.map do |char, index|
+        absolute = offset + index
+        position_set.include?(absolute) ? "\e[1;4m#{char}\e[0m" : char
+      end.join
+      offset += cell.each_char.count + delimiter_width
+      rendered
+    end
+  end
+
+  def render_table(rows)
+    column_count = [rows.map { |row| row[:plain_cells].length }.max || 0, @columns.length].max
+    headers = headers_for(column_count)
+    widths = column_widths(rows, headers, column_count)
+    row_width = [rows.map { |row| row[:row_index] }.max.to_i.to_s.length, 1].max
+
+    @output.puts(table_header(headers, widths, row_width))
+    @output.puts(table_separator(widths, row_width))
+    rows.each do |row|
+      @output.puts(table_row(row, widths, row_width, column_count))
+    end
+  end
+
+  def headers_for(column_count)
+    if @columns.empty?
+      Array.new(column_count) { |index| "col#{index + 1}" }
+    else
+      Array.new(column_count) do |index|
+        @columns[index] || "col#{index + 1}"
+      end
+    end
+  end
+
+  def column_widths(rows, headers, column_count)
+    Array.new(column_count) do |index|
+      [
+        headers[index].to_s.each_char.count,
+        rows.map { |row| row[:plain_cells][index].to_s.each_char.count }.max.to_i
+      ].max
+    end
+  end
+
+  def table_header(headers, widths, row_width)
+    segments = headers.each_with_index.map do |header, index|
+      pad(header, header.each_char.count, widths[index])
+    end
+    format('st %*s | %s', row_width, '#', segments.join(' | '))
+  end
+
+  def table_separator(widths, row_width)
+    segments = widths.map { |width| '-' * width }
+    format('-- %s-+-%s', '-' * row_width, segments.join('-+-'))
+  end
+
+  def table_row(row, widths, row_width, column_count)
+    segments = Array.new(column_count) do |index|
+      rendered = row[:render_cells][index].to_s
+      plain = row[:plain_cells][index].to_s
+      pad(rendered, plain.each_char.count, widths[index])
+    end
+    format('%2s %*d | %s', row[:marker], row_width, row[:row_index], segments.join(' | '))
+  end
+
+  def pad(rendered, plain_width, target_width)
+    rendered + (' ' * [target_width - plain_width, 0].max)
+  end
+
+  def output_line(event)
+    parts = []
+    parts << 'output:'
+    parts << "query=#{event['query'].inspect}" if event['query']
+    parts << "pressed=#{event['pressed'].inspect}" if event['pressed']
+    parts << "items=#{Array(event['items']).map(&:inspect).join(', ')}" if event['items']
+    parts.join(' ')
+  end
+end
+
+def decode_delimiter(str)
+  str.gsub(/\\t|\\n|\\r|\\\\/) do |match|
+    case match
+    when '\t'
+      "\t"
+    when '\n'
+      "\n"
+    when '\r'
+      "\r"
+    else
+      '\\'
+    end
+  end
+end
+
+options = {
+  delimiter: "\t",
+  columns: [],
+  raw: false
+}
+
+OptionParser.new do |parser|
+  parser.banner = "Usage: fzf-viewport-table [options] < stream.jsonl"
+  parser.separator("")
+  parser.separator(DESCRIPTION.strip)
+  parser.separator("")
+
+  parser.on('--delimiter=STR', 'Split row text into columns using STR') do |value|
+    options[:delimiter] = decode_delimiter(value)
+  end
+
+  parser.on('--columns=LIST', 'Comma-separated column names') do |value|
+    options[:columns] = value.split(',').map(&:strip)
+  end
+
+  parser.on('--raw', 'Use raw item text instead of display text') do
+    options[:raw] = true
+  end
+
+  parser.on('-h', '--help', 'Show this help') do
+    puts parser
+    puts
+    puts EXAMPLES
+    exit 0
+  end
+end.parse!(ARGV)
+
+ViewportTable.new($stdin, $stdout, options).run
