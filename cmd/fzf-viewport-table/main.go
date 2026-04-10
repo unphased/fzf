@@ -278,7 +278,7 @@ func (a *app) readKeys(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	if err := setTTYRaw(); err != nil {
+	if err := setTTYInputMode(); err != nil {
 		return
 	}
 	defer restoreTTYState(oldState)
@@ -716,8 +716,8 @@ func captureTTYState() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-func setTTYRaw() error {
-	cmd := exec.Command("sh", "-c", "stty raw -echo < /dev/tty")
+func setTTYInputMode() error {
+	cmd := exec.Command("sh", "-c", "stty -echo -icanon -isig min 1 time 0 < /dev/tty")
 	return cmd.Run()
 }
 
