@@ -86,8 +86,8 @@ Tabular viewport example:
 
 ```sh
 tail -n +2 test/viewport-sheet.tsv \
-  | bin/fzf --headless --sync --query atlas --viewport-stream=- \
-  | bin/fzf-viewport-table \
+  | bin/fzf --headless --listen 6266 --viewport-stream=- \
+  | bin/fzf-viewport-table --listen 6266 \
       --delimiter='\t' \
       --columns 'ID,Project,Owner,Region,Status,Priority,ARR,Renewal,Notes'
 ```
