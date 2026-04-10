@@ -3,6 +3,16 @@
 require 'json'
 require 'set'
 
+USAGE = <<~TEXT
+  Usage: fzf-viewport-ui < stream.jsonl
+
+  Render fzf viewport snapshot NDJSON from stdin in a human-readable form.
+
+  Examples:
+    fzf --headless --viewport-stream=- | bin/fzf-viewport-ui
+    tail -f /tmp/fzf-vp.jsonl | bin/fzf-viewport-ui
+TEXT
+
 class ViewportUI
   def initialize(input, output)
     @input = input
@@ -149,6 +159,11 @@ class ViewportUI
     end
     parts.join(' ')
   end
+end
+
+if ARGV.include?('--help') || ARGV.include?('-h')
+  puts USAGE
+  exit 0
 end
 
 ViewportUI.new($stdin, $stdout).run

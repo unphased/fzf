@@ -55,6 +55,33 @@ make itest
 ruby test/runner.rb --name test_something
 ```
 
+Viewport stream debug UI
+------------------------
+
+The repo includes a small debug consumer for the viewport snapshot stream:
+
+```sh
+bin/fzf-viewport-ui --help
+```
+
+Headless example:
+
+```sh
+printf 'foo\nbar\nfoobar\n' \
+  | bin/fzf --headless --viewport-stream=- \
+  | bin/fzf-viewport-ui
+```
+
+Side-channel example:
+
+```sh
+mkfifo /tmp/fzf-vp.jsonl
+tail -f /tmp/fzf-vp.jsonl | bin/fzf-viewport-ui
+
+printf 'foo\nbar\nfoobar\n' \
+  | bin/fzf --viewport-stream=/tmp/fzf-vp.jsonl
+```
+
 Third-party libraries used
 --------------------------
 
