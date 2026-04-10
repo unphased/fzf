@@ -58,6 +58,8 @@ ruby test/runner.rb --name test_something
 Viewport stream debug UI
 ------------------------
 
+See [doc/viewport-stream.md](doc/viewport-stream.md) for the full workflow.
+
 The repo includes a small debug consumer for the viewport snapshot stream:
 
 ```sh
@@ -85,11 +87,15 @@ printf 'foo\nbar\nfoobar\n' \
 Tabular viewport example:
 
 ```sh
-tail -n +2 test/viewport-sheet.tsv \
-  | bin/fzf --headless --listen 6266 --viewport-stream=- \
-  | bin/fzf-viewport-table --listen 6266 \
+mkfifo /tmp/fzf-vp.fifo
+
+cat /tmp/fzf-vp.fifo \
+  | bin/fzf-viewport-table \
       --delimiter='\t' \
       --columns 'ID,Project,Owner,Region,Status,Priority,ARR,Renewal,Notes'
+
+tail -n +2 test/viewport-sheet.tsv \
+  | bin/fzf --viewport-stream=/tmp/fzf-vp.fifo
 ```
 
 Third-party libraries used
