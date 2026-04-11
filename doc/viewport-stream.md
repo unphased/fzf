@@ -32,18 +32,6 @@ tail -n +2 test/viewport-sheet.tsv \
 
 This does **not** require `--headless`.
 
-### Headless mode
-
-Disable the built-in TUI and emit snapshots on stdout:
-
-```sh
-tail -n +2 test/viewport-sheet.tsv \
-  | bin/fzf --headless --viewport-stream=- \
-  | bin/fzf-viewport-ui
-```
-
-Headless mode is useful when the external frontend is the only renderer.
-
 ## Debug consumer
 
 The repo includes a simple stream viewer:
@@ -86,7 +74,12 @@ tail -n +2 test/viewport-sheet.tsv \
 ### Driving fzf with `--listen`
 
 If the external frontend should also send user input back to fzf, run fzf with
-`--listen` and point the frontend at the same socket or port.
+`--listen` and point the frontend at the same socket or port. This is the mode
+where `--headless` becomes useful as a full replacement for the built-in TUI.
+In headless mode, the standard terminal engine stays silent: fzf keeps running
+its matcher, state machine, and viewport updates, but it does not render the
+built-in terminal UI. Without `--listen`, headless mode is mostly useful for
+passive rendering and debugging.
 
 Unix socket example:
 
@@ -132,6 +125,8 @@ It is intentionally uneven so column alignment issues are easy to spot.
 ## Notes
 
 - `--viewport-stream=-` requires `--headless`
+- `--headless` by itself does not provide an input path; interactive frontends
+  should pair it with `--listen`
 - a file or FIFO path works with either normal TUI mode or headless mode
 - side-channel mode is the easiest way to compare the built-in TUI with an
   alternate frontend
